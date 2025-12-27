@@ -2,19 +2,23 @@ import { createAction, Property } from 'workflow-blocks-framework';
 import { promises as fs } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { nanoid } from 'nanoid';
 import Jimp from 'jimp';
 
-const execPromise = promisify(exec);
+const execFilePromise = promisify(execFile);
 const pdftoppmPath = '/usr/bin/pdftoppm';
 
 const MAX_FILE_SIZE = 16 * 1024 * 1024;
 
 async function isPdftoppmInstalled(): Promise<boolean> {
-    const { stdout, stderr } = await execPromise(`command -v ${pdftoppmPath}`);
-    return !stderr && stdout.trim() === pdftoppmPath;
+    try {
+        const { stdout } = await execFilePromise('/usr/bin/which', [pdftoppmPath]);
+        return stdout.trim() === pdftoppmPath;
+    } catch {
+        return false;
+    }
 }
 async function convertPdfToImages(dataBuffer: Buffer): Promise<Buffer[]> {
     const tempDir = tmpdir();
@@ -25,7 +29,9 @@ async function convertPdfToImages(dataBuffer: Buffer): Promise<Buffer[]> {
         await fs.mkdir(outputDir);
         await fs.writeFile(inputFilePath, dataBuffer);
 
-        const { stderr } = await execPromise(`${pdftoppmPath} -png ${inputFilePath} ${join(outputDir, 'output')}`);
+        // Use execFile with array arguments to prevent command injection
+        const outputPrefix = join(outputDir, 'output');
+        const { stderr } = await execFilePromise(pdftoppmPath, ['-png', inputFilePath, outputPrefix]);
         if (stderr) {
             throw new Error(stderr);
         }

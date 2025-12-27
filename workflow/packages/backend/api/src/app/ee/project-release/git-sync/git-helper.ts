@@ -9,6 +9,27 @@ import { userIdentityService } from '../../../authentication/user-identity/user-
 import { system } from '../../../helper/system/system'
 import { userService } from '../../../user/user-service'
 
+/**
+ * Sanitizes a slug to prevent path traversal attacks.
+ * Only allows alphanumeric characters, hyphens, and underscores.
+ */
+function sanitizeSlug(slug: string): string {
+    // Remove any path traversal sequences and invalid characters
+    const sanitized = slug
+        .replace(/\.\./g, '') // Remove parent directory references
+        .replace(/[/\\]/g, '') // Remove path separators
+        .replace(/[^a-zA-Z0-9_-]/g, '_'); // Replace other invalid chars with underscore
+    
+    if (!sanitized || sanitized.length === 0) {
+        throw new AIxBlockError({
+            code: ErrorCode.VALIDATION_FAILED,
+            params: { message: 'Invalid slug: slug cannot be empty or contain only invalid characters' },
+        });
+    }
+    
+    return sanitized;
+}
+
 
 export const gitHelper = {
     commitAndPush,
@@ -30,6 +51,9 @@ async function createGitRepoAndReturnPaths(
     gitRepo: GitRepo,
     userId: string,
 ): Promise<{ flowFolderPath: string, git: SimpleGit, stateFolderPath: string, connectionsFolderPath: string }> {
+    // Sanitize slug to prevent path traversal attacks
+    const safeSlug = sanitizeSlug(gitRepo.slug)
+    
     const tmpFolder = path.join('/', 'tmp', 'repo', gitRepo.projectId)
     try {
         await fs.rmdir(tmpFolder, { recursive: true })
@@ -40,13 +64,13 @@ async function createGitRepoAndReturnPaths(
     const flowFolderPath = path.join(
         tmpFolder,
         'projects',
-        gitRepo.slug,
+        safeSlug,
         'flows',
     )
     const connectionsFolderPath = path.join(
         tmpFolder,
         'projects',
-        gitRepo.slug,
+        safeSlug,
         'connections',
     )
     await fs.mkdir(flowFolderPath, { recursive: true })
@@ -54,7 +78,7 @@ async function createGitRepoAndReturnPaths(
     const stateFolderPath = path.join(
         tmpFolder,
         'projects',
-        gitRepo.slug,
+        safeSlug,
         'state',
     )
     await fs.mkdir(stateFolderPath, { recursive: true })

@@ -8,6 +8,53 @@ import { EnginePrincipal, PrincipalType } from 'workflow-shared'
 import { BillingUsageType, usageService } from '../ee/platform-billing/usage/usage-service'
 import { projectService } from '../project/project-service'
 import { aiProviderService } from './ai-provider.service'
+import dns from 'dns/promises'
+
+// Known AI provider domains that are allowed (allowlist approach)
+const ALLOWED_AI_PROVIDER_DOMAINS = [
+    'api.openai.com',
+    'api.anthropic.com',
+    'generativelanguage.googleapis.com',
+    'api.cohere.ai',
+    'api.mistral.ai',
+    'api.together.xyz',
+    'api.groq.com',
+    'api.perplexity.ai',
+    'api.deepseek.com',
+    'api.fireworks.ai',
+    'api.replicate.com',
+    'api.stability.ai',
+    'inference.ai.azure.com',
+]
+
+// Private IP ranges to block (SSRF protection)
+const PRIVATE_IP_RANGES = [
+    /^127\./,           // Loopback
+    /^10\./,            // Private Class A
+    /^172\.(1[6-9]|2[0-9]|3[0-1])\./, // Private Class B
+    /^192\.168\./,      // Private Class C
+    /^169\.254\./,      // Link-local
+    /^0\./,             // Current network
+    /^::1$/,            // IPv6 loopback
+    /^fe80:/,           // IPv6 link-local
+    /^fc00:/,           // IPv6 unique local
+    /^fd/,              // IPv6 unique local
+]
+
+async function isPrivateIP(hostname: string): Promise<boolean> {
+    try {
+        const addresses = await dns.resolve4(hostname)
+        for (const ip of addresses) {
+            if (PRIVATE_IP_RANGES.some(pattern => pattern.test(ip))) {
+                return true
+            }
+        }
+        return false
+    } catch {
+        // If DNS resolution fails, block the request for safety
+        return true
+    }
+}
 
 export const proxyController: FastifyPluginAsyncTypebox = async (
     fastify,
@@ -38,6 +85,10 @@ export const proxyController: FastifyPluginAsyncTypebox = async (
         }
 
         const url = buildUrl(aiProvider.baseUrl, request.params['*'])
+        
+        // SSRF protection: Validate URL before making request
+        await validateUrlForSSRF(url)
+        
         try {
             const cleanHeaders = calculateHeaders(
                 request.headers as Record<string, string | string[] | undefined>,
@@ -106,6 +157,26 @@ function buildUrl(baseUrl: string, path: string): string {
         throw new Error('Invalid protocol. Only HTTP and HTTPS are allowed.')
     }
     return url.toString()
+}
+
+/**
+ * Validates the target URL for SSRF protection
+ * Blocks requests to private IPs and optionally validates against allowlist
+ */
+async function validateUrlForSSRF(url: string): Promise<void> {
+    const parsedUrl = new URL(url)
+    const hostname = parsedUrl.hostname
+    
+    // Check if hostname is a private IP
+    if (await isPrivateIP(hostname)) {
+        throw new Error(`SSRF protection: Requests to private/internal networks are not allowed`)
+    }
+    
+    // Optional: Enable strict allowlist mode for production
+    // Uncomment the following to enforce strict allowlisting:
+    // if (!ALLOWED_AI_PROVIDER_DOMAINS.some(domain => hostname.endsWith(domain))) {
+    //     throw new Error(`SSRF protection: Domain ${hostname} is not in the allowed AI providers list`)
+    // }
 }
 
 const calculateHeaders = (
